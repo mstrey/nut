@@ -1,0 +1,31 @@
+services:
+  nut-server:
+    image: instantlinux/nut-upsd:latest
+    container_name: nut-server
+    restart: always
+    privileged: true
+    devices:
+      - "/dev/ttyUSB0:/dev/ttyUSB0"
+    environment:
+      - TZ=${TIMEZONE}
+      - API_PASSWORD=${NUT_PASSWORD}
+      - DESCRIPTION=Nobreak SMS
+      - DRIVER=blazer_ser
+      - PORT=/dev/ttyUSB0
+      - NAME=sms
+    networks:
+      - backend
+    volumes:
+      - ./config/ups.conf:/etc/nut/ups.conf:ro
+      - ./config/upsd.users:/etc/nut/upsd.users:ro
+    healthcheck:
+      test: ["CMD", "upsc", "sms@localhost", "ups.status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+networks:
+  backend:
+    external: true
+
