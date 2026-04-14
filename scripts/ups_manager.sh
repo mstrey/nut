@@ -10,7 +10,7 @@ nobreak_sem_energia() {
     local charge="$2"
     
     if [[ "$charge" -gt 20 ]]; then
-        echo "$(date) - Carga menor que 20%"
+        echo "$(date) - Carga maior que 20%"
         return 0
     fi
 
@@ -53,7 +53,8 @@ while true; do
     # Aguarda 60 segundos até a próxima checagem
     sleep 60
     if [ ! -z "$CHARGE" ] && [ ! -z "$STATUS" ]; then
-        if [[ "$charge" -gt 55 ]]; then
+        if [[ "$CHARGE" -gt 55 ]]; then
+            echo "$(date) - Carga maior que 55%"
             continue
         fi        
         if nobreak_sem_energia "$STATUS" "$CHARGE"; then
