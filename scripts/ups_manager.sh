@@ -2,8 +2,20 @@
 
 # Comunica direto com o container nut-server pela rede interna do Docker
 UPS_NAME="sms@nut-server"
-NUT_CONTAINER="nut-server"
-MANAGER_CONTAINER="ups-manager"
+
+# Lista de containers que não devem ser interrompidos
+IGNORED_CONTAINERS=(
+    "nut-server"
+    "ups-manager"
+    "portainer"
+    "traefik"
+    "cloudflared"
+    "crowdsec"
+    "ms-rasp-dc"
+)
+
+# Constrói a regex dinamicamente com base na lista de exclusão
+IGNORE_PATTERN="^($(IFS='|'; echo "${IGNORED_CONTAINERS[*]}"))$"
 
 nobreak_sem_energia() {
     local status="$1"
@@ -59,15 +71,24 @@ while true; do
         fi        
         if nobreak_sem_energia "$STATUS" "$CHARGE"; then
             echo "$(date) - Energia ausente. Bateria em $CHARGE%. Parando containers..."
-            # Ignora o NUT e este próprio container gerenciador
-            #docker ps --format "{{.Names}}" | grep -vE "^(${NUT_CONTAINER}|${MANAGER_CONTAINER})$" | xargs -r docker stop
+            # Ignora os containers definidos na lista no topo deste script
+            CONTAINERS_TO_STOP=$(docker ps --format "{{.Names}}" | grep -vE "$IGNORE_PATTERN")
+            if [ ! -z "$CONTAINERS_TO_STOP" ]; then
+                for container_name in $CONTAINERS_TO_STOP; do
+                    echo "$(date) - Parando container: $container_name"
+                    docker stop "$container_name" >/dev/null
+                done
+            fi
         fi    
 
         if nobreak_com_energia "$STATUS" "$CHARGE"; then
             PARADOS=$(docker ps -a -f "status=exited" --format "{{.Names}}")
             if [ ! -z "$PARADOS" ]; then
                 echo "$(date) - Energia restaurada. Bateria segura em $CHARGE%. Iniciando containers..."
-                #docker ps -a -f "status=exited" --format "{{.Names}}" | xargs -r docker start
+                for container_name in $PARADOS; do
+                    echo "$(date) - Iniciando container: $container_name"
+                    docker start "$container_name" >/dev/null
+                done
             fi
         fi
     fi
