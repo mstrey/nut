@@ -9,7 +9,7 @@ nobreak_sem_energia() {
     local status="$1"
     local charge="$2"
     
-    if [ "$charge" -gt 20 ]; then
+    if [[ "$charge" -gt 20 ]]; then
         return 0
     fi
 
@@ -29,7 +29,7 @@ nobreak_com_energia() {
     local charge="$2"
     
     if [[ "$status" == *"OL"* ]]; then
-        if [ "$charge" -gt 50 ]; then
+        if [[ "$charge" -gt 50 ]]; then
             return 1
         fi
     fi
@@ -47,7 +47,7 @@ while true; do
     # Aguarda 60 segundos até a próxima checagem
     sleep 60
     if [ ! -z "$CHARGE" ] && [ ! -z "$STATUS" ]; then
-        if [ "$charge" -gt 55 ]; then
+        if [[ "$charge" -gt 55 ]]; then
             continue
         fi        
         if nobreak_sem_energia "$STATUS" "$CHARGE"; then
