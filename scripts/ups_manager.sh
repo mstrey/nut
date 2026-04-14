@@ -41,6 +41,7 @@ echo "Iniciando monitoramento contínuo do Nobreak SMS..."
 
 while true; do
     CHARGE=$(upsc $UPS_NAME battery.charge 2>/dev/null)
+    CHARGE="${CHARGE%.*}"
     STATUS=$(upsc $UPS_NAME ups.status 2>/dev/null)
 
     echo "$(date) - Bateria com $CHARGE% de carga e status $STATUS."
