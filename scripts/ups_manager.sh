@@ -79,6 +79,7 @@ while true; do
                     docker stop "$container_name" >/dev/null
                 done
             fi
+            continue
         fi    
 
         if nobreak_com_energia "$STATUS" "$CHARGE"; then
