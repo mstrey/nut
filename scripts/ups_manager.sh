@@ -10,14 +10,17 @@ nobreak_sem_energia() {
     local charge="$2"
     
     if [[ "$charge" -gt 20 ]]; then
+        echo "$(date) - carga menor que 20%"
         return 0
     fi
 
     if [[ "$status" == *"OB"* ]]; then
+        echo "$(date) - bateria em modo de descarga"
         return 1
     fi
 
     if [[ "$status" == *"LB"* ]]; then
+        echo "$(date) - bateria em modo de descarga"
         return 1
     fi
 
@@ -29,7 +32,9 @@ nobreak_com_energia() {
     local charge="$2"
     
     if [[ "$status" == *"OL"* ]]; then
+        echo "$(date) - bateria em modo de carga"
         if [[ "$charge" -gt 50 ]]; then
+            echo "$(date) - carga maior que 50%"  
             return 1
         fi
     fi
