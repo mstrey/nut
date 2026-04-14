@@ -1,0 +1,4 @@
+[upsmon]
+    password = ${NUT_PASSWORD}
+    upsmon master
+

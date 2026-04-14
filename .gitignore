@@ -1,7 +1,6 @@
 # Ignorar arquivos de ambiente
 .env
 
-# Ignorar pastas de dados locais (se houver volumes mapeados para a raiz)
+# Ignorar logs de execução e pastas de dados locais
+*.log
 dados/
-config/upsd.users
-

@@ -1,38 +1,65 @@
 #!/bin/bash
 
-# Configurações
-UPS_NAME="sms@localhost"
+# Comunica direto com o container nut-server pela rede interna do Docker
+UPS_NAME="sms@nut-server"
 NUT_CONTAINER="nut-server"
-LOG_FILE="/var/log/ups_manager.log"
+MANAGER_CONTAINER="ups-manager"
 
-# Obtém dados do nobreak
-CHARGE=$(upsc $UPS_NAME battery.charge 2>/dev/null)
-STATUS=$(upsc $UPS_NAME ups.status 2>/dev/null)
-
-# Valida se conseguiu ler os dados
-if [ -z "$CHARGE" ] || [ -z "$STATUS" ]; then
-    exit 1
-fi
-
-# Regra 1: Bateria <= 20% e sem energia (OB - On Battery)
-if [[ "$STATUS" == *"OB"* ]] || [[ "$STATUS" == *"LB"* ]]; then
-    if [ "$CHARGE" -le 20 ]; then
-        echo "$(date) - Energia ausente. Bateria em $CHARGE%. Parando containers..." >> $LOG_FILE
-        # Lista todos os containers rodando, ignora o NUT, e para os demais
-        docker ps --format "{{.Names}}" | grep -v "^${NUT_CONTAINER}$" | xargs -r docker stop >> $LOG_FILE 2>&1
+nobreak_sem_energia() {
+    local status="$1"
+    local charge="$2"
+    
+    if [ "$charge" -gt 20 ]; then
+        return 0
     fi
-    exit 0
-fi
 
-# Regra 2: Energia restaurada (OL - On Line) e Bateria >= 50%
-if [[ "$STATUS" == *"OL"* ]]; then
-    if [ "$CHARGE" -ge 50 ]; then
-        # Verifica se há containers parados para iniciar
-        PARADOS=$(docker ps -a -f "status=exited" --format "{{.Names}}")
-        if [ ! -z "$PARADOS" ]; then
-            echo "$(date) - Energia restaurada. Bateria segura em $CHARGE%. Iniciando containers..." >> $LOG_FILE
-            # Inicia os containers que estavam parados
-            docker ps -a -f "status=exited" --format "{{.Names}}" | xargs -r docker start >> $LOG_FILE 2>&1
+    if [[ "$status" == *"OB"* ]]; then
+        return 1
+    fi
+
+    if [[ "$status" == *"LB"* ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+nobreak_com_energia() {
+    local status="$1"
+    local charge="$2"
+    
+    if [[ "$status" == *"OL"* ]]; then
+        if [ "$charge" -gt 50 ]; then
+            return 1
         fi
     fi
-fi
+
+    return 0
+}
+
+echo "Iniciando monitoramento contínuo do Nobreak SMS..."
+
+while true; do
+    CHARGE=$(upsc $UPS_NAME battery.charge 2>/dev/null)
+    STATUS=$(upsc $UPS_NAME ups.status 2>/dev/null)
+
+    if [ ! -z "$CHARGE" ] && [ ! -z "$STATUS" ]; then
+        
+        if nobreak_sem_energia "$STATUS" "$CHARGE"; then
+            echo "$(date) - Energia ausente. Bateria em $CHARGE%. Parando containers..."
+            # Ignora o NUT e este próprio container gerenciador
+            docker ps --format "{{.Names}}" | grep -vE "^(${NUT_CONTAINER}|${MANAGER_CONTAINER})$" | xargs -r docker stop
+        fi    
+
+        if nobreak_com_energia "$STATUS" "$CHARGE"; then
+            PARADOS=$(docker ps -a -f "status=exited" --format "{{.Names}}")
+            if [ ! -z "$PARADOS" ]; then
+                echo "$(date) - Energia restaurada. Bateria segura em $CHARGE%. Iniciando containers..."
+                docker ps -a -f "status=exited" --format "{{.Names}}" | xargs -r docker start
+            fi
+        fi
+    fi
+    echo "$(date) - Energia presente. Bateria em $CHARGE%."
+    # Aguarda 60 segundos até a próxima checagem
+    sleep 60
+done

@@ -1,31 +1,37 @@
 services:
   nut-server:
-    image: instantlinux/nut-upsd:latest
+    build: .
     container_name: nut-server
     restart: always
     privileged: true
     devices:
       - "/dev/ttyUSB0:/dev/ttyUSB0"
     environment:
+      - NUT_PASSWORD=${NUT_PASSWORD}
       - TZ=${TIMEZONE}
-      - API_PASSWORD=${NUT_PASSWORD}
-      - DESCRIPTION=Nobreak SMS
-      - DRIVER=blazer_ser
-      - PORT=/dev/ttyUSB0
-      - NAME=sms
     networks:
       - backend
-    volumes:
-      - ./config/ups.conf:/etc/nut/ups.conf:ro
-      - ./config/upsd.users:/etc/nut/upsd.users:ro
     healthcheck:
-      test: ["CMD", "upsc", "sms@localhost", "ups.status"]
+      test: [ "CMD", "upsc", "sms@localhost", "ups.status" ]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+
+  # Novo serviço de monitoramento
+  ups-manager:
+    build: .
+    container_name: ups-manager
+    restart: always
+    depends_on:
+      nut-server:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./scripts/ups_manager.sh:/usr/local/bin/ups_manager.sh:ro
+    entrypoint: [ "/bin/bash", "/usr/local/bin/ups_manager.sh" ]
+    networks:
+      - backend
 
 networks:
   backend:
     external: true
-
