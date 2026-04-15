@@ -3,6 +3,13 @@
 # Comunica direto com o container nut-server pela rede interna do Docker
 UPS_NAME="sms@nut-server"
 
+EMAIL_DESTINO="${EMAIL_DESTINO:-}"
+SES_SMTP_USER="${SES_SMTP_USER:-}"
+SES_SMTP_PASS="${SES_SMTP_PASS:-}"
+SES_SMTP_HOST="${SES_SMTP_HOST:-email-smtp.sa-east-1.amazonaws.com}"
+SES_SMTP_PORT="${SES_SMTP_PORT:-587}"
+SES_FROM_EMAIL="${SES_FROM_EMAIL:-sms@strey.net.br}"
+
 # Lista de containers que não devem ser interrompidos
 IGNORED_CONTAINERS=(
     "nut-server"
@@ -16,6 +23,45 @@ IGNORED_CONTAINERS=(
 
 # Constrói a regex dinamicamente com base na lista de exclusão
 IGNORE_PATTERN="^($(IFS='|'; echo "${IGNORED_CONTAINERS[*]}"))$"
+
+enviar_email_shutdown() {
+    local charge_level="$1"
+    local containers="$2"
+
+    local subject="[ALERTA UPS] Falta de energia - Parando containers"
+    local body="A energia do servidor caiu. O Nobreak está atualmente com a bateria em ${charge_level}%.\n\nParando containers:\n${containers}"
+
+    enviar_email "$body" "$subject"
+}
+
+enviar_email_startup() {
+    local charge_level="$1"
+    local containers="$2"
+
+    local subject="[ALERTA UPS] Retorno de energia - Iniciando containers"
+    local body="A energia do servidor voltou. O Nobreak está atualmente com a bateria em ${charge_level}%.\n\nIniciando containers:\n${containers}"
+
+    enviar_email "$body" "$subject"
+}
+
+enviar_email() {
+    local body="$1"
+    local subject="$2"
+
+    if [ ! -z "$EMAIL_DESTINO" ] && [ ! -z "$SES_SMTP_USER" ] && [ ! -z "$SES_SMTP_PASS" ]; then
+        local PROTO="smtp"
+        if [ "$SES_SMTP_PORT" = "465" ]; then PROTO="smtps"; fi
+
+        local PAYLOAD="From: ${SES_FROM_EMAIL}\nTo: ${EMAIL_DESTINO}\nSubject: ${subject}\n\n${body}"
+
+        echo -e "$PAYLOAD" | curl --url "$PROTO://$SES_SMTP_HOST:$SES_SMTP_PORT" \
+            --ssl-reqd \
+            --mail-from "$SES_FROM_EMAIL" \
+            --mail-rcpt "$EMAIL_ALERTA" \
+            --user "$SES_SMTP_USER:$SES_SMTP_PASS" \
+            -T - >/dev/null 2>&1 || true
+    fi
+}
 
 nobreak_sem_energia() {
     local status="$1"
@@ -74,6 +120,7 @@ while true; do
             # Ignora os containers definidos na lista no topo deste script
             CONTAINERS_TO_STOP=$(docker ps --format "{{.Names}}" | grep -vE "$IGNORE_PATTERN")
             if [ ! -z "$CONTAINERS_TO_STOP" ]; then
+                enviar_email_shutdown "$CHARGE" "$CONTAINERS_TO_STOP"
                 for container_name in $CONTAINERS_TO_STOP; do
                     echo "$(date) - Parando container: $container_name"
                     docker stop "$container_name" >/dev/null
@@ -85,6 +132,7 @@ while true; do
         if nobreak_com_energia "$STATUS" "$CHARGE"; then
             PARADOS=$(docker ps -a -f "status=exited" --format "{{.Names}}")
             if [ ! -z "$PARADOS" ]; then
+                enviar_email_startup "$CHARGE" "$PARADOS"
                 echo "$(date) - Energia restaurada. Bateria segura em $CHARGE%. Iniciando containers..."
                 for container_name in $PARADOS; do
                     echo "$(date) - Iniciando container: $container_name"

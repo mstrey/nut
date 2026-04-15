@@ -2,7 +2,7 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && \
     apt-get install -y build-essential pkg-config \
-    libusb-1.0-0-dev libssl-dev gettext-base wget docker.io
+    libusb-1.0-0-dev libssl-dev gettext-base wget curl docker.io
 
 RUN rm -rf /var/lib/apt/lists/*
 
