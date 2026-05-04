@@ -21,6 +21,17 @@ IGNORED_CONTAINERS=(
     "ms-rasp-dc"
 )
 
+THRESHOLD_HALT=15 
+THRESHOLD_VOLTAGE="11.80"
+
+enviar_email_critical_halt() {
+    local charge="$1"
+    local volt="$2"
+    local subject="[ALERTA CRÍTICO UPS] Desligando Servidor"
+    local body="Bateria atingiu nível crítico: ${charge}% (${volt}V). Desligando sistema e UPS."
+    enviar_email "$body" "$subject"
+}
+
 # Constrói a regex dinamicamente com base na lista de exclusão
 IGNORE_PATTERN="^($(IFS='|'; echo "${IGNORED_CONTAINERS[*]}"))$"
 
@@ -103,42 +114,54 @@ nobreak_com_energia() {
 echo "Iniciando monitoramento contínuo do Nobreak SMS..."
 
 while true; do
-    CHARGE=$(upsc $UPS_NAME battery.charge 2>/dev/null)
-    CHARGE="${CHARGE%.*}"
+    CHARGE=$(upsc $UPS_NAME battery.charge 2>/dev/null | grep -oE '[0-9]+' | head -1)
+    VOLTAGE=$(upsc $UPS_NAME battery.voltage 2>/dev/null)
     STATUS=$(upsc $UPS_NAME ups.status 2>/dev/null)
 
-    echo "$(date) - Bateria com $CHARGE% de carga e status $STATUS."
-    # Aguarda 60 segundos até a próxima checagem
-    sleep 60
-    if [ ! -z "$CHARGE" ] && [ ! -z "$STATUS" ]; then
-        if [[ "$CHARGE" -gt 55 ]]; then
-            echo "$(date) - Carga maior que 55%"
-            continue
-        fi        
-        if nobreak_sem_energia "$STATUS" "$CHARGE"; then
-            echo "$(date) - Energia ausente. Bateria em $CHARGE%. Parando containers..."
-            # Ignora os containers definidos na lista no topo deste script
-            CONTAINERS_TO_STOP=$(docker ps --format "{{.Names}}" | grep -vE "$IGNORE_PATTERN")
-            if [ ! -z "$CONTAINERS_TO_STOP" ]; then
-                enviar_email_shutdown "$CHARGE" "$CONTAINERS_TO_STOP"
-                for container_name in $CONTAINERS_TO_STOP; do
-                    echo "$(date) - Parando container: $container_name"
-                    docker stop "$container_name" >/dev/null
-                done
-            fi
-            continue
-        fi    
+    if [[ "$STATUS" == *"OB"* ]]; then
+        upscmd $UPS_NAME beeper.disable >/dev/null 2>&1
+    fi
 
-        if nobreak_com_energia "$STATUS" "$CHARGE"; then
-            PARADOS=$(docker ps -a -f "status=exited" --format "{{.Names}}")
-            if [ ! -z "$PARADOS" ]; then
-                enviar_email_startup "$CHARGE" "$PARADOS"
-                echo "$(date) - Energia restaurada. Bateria segura em $CHARGE%. Iniciando containers..."
-                for container_name in $PARADOS; do
-                    echo "$(date) - Iniciando container: $container_name"
-                    docker start "$container_name" >/dev/null
-                done
-            fi
+    echo "$(date) - Status: $STATUS | Bateria: $CHARGE% | Voltagem: ${VOLTAGE}V"
+
+    VOLT_CRITICAL=$(echo "$VOLTAGE < $THRESHOLD_VOLTAGE" | bc -l 2>/dev/null)
+
+    if [[ "$STATUS" == *"OB"* ]] && ([ "$CHARGE" -le "$THRESHOLD_HALT" ] || [ "$VOLT_CRITICAL" -eq 1 ]); then
+        echo "$(date) - [CRÍTICO] Iniciando sequência de Power Off."
+        enviar_email_critical_halt "$CHARGE" "$VOLTAGE"
+        
+        docker stop $(docker ps -q) -t 30 >/dev/null 2>&1
+        
+        sync
+        umount /mnt/storage >/dev/null 2>&1
+        
+        echo "$(date) - Enviando comando KILL POWER para o Nobreak..."
+        docker exec nut-server upsdrvctl shutdown
+        
+        echo "$(date) - Desligando Sistema Operacional."
+        /sbin/shutdown -h +0
+        exit 0
+    fi
+
+    if [ ! -z "$CHARGE" ] && [[ "$STATUS" == *"OB"* ]]; then
+        if [ "$CHARGE" -le 20 ]; then
+             CONTAINERS_TO_STOP=$(docker ps --format "{{.Names}}" | grep -vE "$IGNORE_PATTERN")
+             if [ ! -z "$CONTAINERS_TO_STOP" ]; then
+                echo "$(date) - Falta de energia. Parando não-críticos..."
+                enviar_email_shutdown "$CHARGE" "$CONTAINERS_TO_STOP"
+                for c in $CONTAINERS_TO_STOP; do docker stop "$c" -t 30; done
+             fi
         fi
     fi
+
+    if [[ "$STATUS" == *"OL"* ]] && [ "$CHARGE" -gt 50 ]; then
+        PARADOS=$(docker ps -a -f "status=exited" --format "{{.Names}}")
+        if [ ! -z "$PARADOS" ]; then
+            echo "$(date) - Energia restaurada. Subindo serviços..."
+            enviar_email_startup "$CHARGE" "$PARADOS"
+            for c in $PARADOS; do docker start "$c"; done
+        fi
+    fi
+
+    sleep 60
 done
