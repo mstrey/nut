@@ -22,7 +22,10 @@ IGNORED_CONTAINERS=(
 )
 
 THRESHOLD_HALT=15 
-THRESHOLD_VOLTAGE="11.80"
+THRESHOLD_VOLTAGE="11.90"
+LAST_STATUS=""
+LAST_CHARGE=""
+LAST_VOLTAGE=""
 
 enviar_email_critical_halt() {
     local charge="$1"
@@ -59,19 +62,33 @@ enviar_email() {
     local body="$1"
     local subject="$2"
 
+    echo "$(date) - [EMAIL] Tentando enviar: $subject"
+
     if [ ! -z "$EMAIL_DESTINO" ] && [ ! -z "$SES_SMTP_USER" ] && [ ! -z "$SES_SMTP_PASS" ]; then
         local PROTO="smtp"
         if [ "$SES_SMTP_PORT" = "465" ]; then PROTO="smtps"; fi
 
         local PAYLOAD="From: ${SES_FROM_EMAIL}\nTo: ${EMAIL_DESTINO}\nSubject: ${subject}\n\n${body}"
 
-        echo -e "$PAYLOAD" | curl --url "$PROTO://$SES_SMTP_HOST:$SES_SMTP_PORT" \
+        # Captura o output e o código de status do curl para log
+        RESPONSE=$(echo -e "$PAYLOAD" | curl --url "$PROTO://$SES_SMTP_HOST:$SES_SMTP_PORT" \
             --ssl-reqd \
             --mail-from "$SES_FROM_EMAIL" \
-            --mail-rcpt "$EMAIL_ALERTA" \
+            --mail-rcpt "$EMAIL_DESTINO" \
             --user "$SES_SMTP_USER:$SES_SMTP_PASS" \
-            -T - >/dev/null 2>&1 || true
+            -T - 2>&1)
+        
+        local EXIT_CODE=$?
+
+        if [ $EXIT_CODE -eq 0 ]; then
+            echo "$(date) - [EMAIL] Enviado com sucesso."
+            return 0
+        fi
+        echo "$(date) - [EMAIL] ERRO ao enviar. Código Curl: $EXIT_CODE. Resposta: $RESPONSE"
+        return 1
     fi
+    echo "$(date) - [EMAIL] Falha: Variáveis de configuração de e-mail incompletas."
+    return 2
 }
 
 nobreak_sem_energia() {
@@ -111,36 +128,46 @@ nobreak_com_energia() {
     return 0
 }
 
-echo "Iniciando monitoramento contínuo do Nobreak SMS..."
+echo "$(date) - Iniciando monitoramento contínuo do Nobreak SMS..."
 
 while true; do
     CHARGE=$(upsc $UPS_NAME battery.charge 2>/dev/null | grep -oE '[0-9]+' | head -1)
     VOLTAGE=$(upsc $UPS_NAME battery.voltage 2>/dev/null)
     STATUS=$(upsc $UPS_NAME ups.status 2>/dev/null)
 
-    if [[ "$STATUS" == *"OB"* ]]; then
-        upscmd $UPS_NAME beeper.disable >/dev/null 2>&1
+    if [ "$STATUS" != "$LAST_STATUS" ] || [ "$CHARGE" != "$LAST_CHARGE" ] || [ "$VOLTAGE" != "$LAST_VOLTAGE" ]; then
+        echo "$(date) - Status: $STATUS | Bateria: $CHARGE% | Voltagem: ${VOLTAGE}V"
+        LAST_STATUS="$STATUS"
+        LAST_CHARGE="$CHARGE"
+        LAST_VOLTAGE="$VOLTAGE"
     fi
 
-    echo "$(date) - Status: $STATUS | Bateria: $CHARGE% | Voltagem: ${VOLTAGE}V"
+    if [[ "$STATUS" == *"OB"* ]]; then
+        docker exec nut-server upscmd sms@localhost beeper.disable
+    fi
 
     VOLT_CRITICAL=$(echo "$VOLTAGE < $THRESHOLD_VOLTAGE" | bc -l 2>/dev/null)
 
-    if [[ "$STATUS" == *"OB"* ]] && ([ "$CHARGE" -le "$THRESHOLD_HALT" ] || [ "$VOLT_CRITICAL" -eq 1 ]); then
-        echo "$(date) - [CRÍTICO] Iniciando sequência de Power Off."
-        enviar_email_critical_halt "$CHARGE" "$VOLTAGE"
-        
-        docker stop $(docker ps -q) -t 30 >/dev/null 2>&1
-        
-        sync
-        umount /mnt/storage >/dev/null 2>&1
-        
-        echo "$(date) - Enviando comando KILL POWER para o Nobreak..."
-        docker exec nut-server upsdrvctl shutdown
-        
-        echo "$(date) - Desligando Sistema Operacional."
-        /sbin/shutdown -h +0
-        exit 0
+    if [ ! -z "$VOLTAGE" ] && [ ! -z "$STATUS" ]; then
+        VOLT_CRITICAL=$(echo "$VOLTAGE < $THRESHOLD_VOLTAGE" | bc -l 2>/dev/null)
+
+        if [[ "$STATUS" == *"OB"* ]] && ([ "$CHARGE" -le "$THRESHOLD_HALT" ] || [ "$VOLT_CRITICAL" -eq 1 ]); then
+            echo "$(date) - [FATAL] Limite atingido! Motivo: Charge=${CHARGE}% ou Volt=${VOLTAGE}V"
+            enviar_email_critical_halt "$CHARGE" "$VOLTAGE"
+            
+            echo "$(date) - [STOP] Parando containers..."
+            docker stop $(docker ps -q) -t 30
+            
+            echo "$(date) - [FS] Sincronizando discos e desmontando /mnt/storage"
+            sync && umount /mnt/storage
+            
+            echo "$(date) - [UPS] Enviando KILL POWER"
+            docker exec nut-server upsdrvctl shutdown
+            
+            echo "$(date) - [HALT] Desligando SO."
+            /sbin/shutdown -h +0
+            exit 0
+        fi
     fi
 
     if [ ! -z "$CHARGE" ] && [[ "$STATUS" == *"OB"* ]]; then
@@ -163,5 +190,5 @@ while true; do
         fi
     fi
 
-    sleep 60
+    sleep 30
 done
