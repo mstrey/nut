@@ -91,38 +91,58 @@ enviar_email() {
     return 2
 }
 
-nobreak_sem_energia() {
-    local status="$1"
-    local charge="$2"
+encerrar_sistemas() {
+    echo "$(date) - [STOP] Parando containers..."
+    docker stop $(docker ps -q) -t 30
     
-    if [[ "$charge" -gt 20 ]]; then
-        echo "$(date) - Carga maior que 20%"
+    echo "$(date) - [FS] Sincronizando discos e desmontando /mnt/storage"
+    # sync && umount /mnt/storage
+    
+    echo "$(date) - [UPS] Enviando KILL POWER"
+    # docker exec nut-server upsdrvctl shutdown
+    
+    echo "$(date) - [HALT] Desligando SO."
+    # /sbin/shutdown -h +0
+}
+
+restaurar_sistemas() {
+    local charge="$1"
+
+    local PARADOS=$(docker ps -a -f "status=exited" --format "{{.Names}}")
+
+    if [ ! -z "$PARADOS" ]; then
+        echo "$(date) - Energia restaurada. Subindo serviços..."
+        enviar_email_startup "$charge" "$PARADOS"
+        for c in $PARADOS; do 
+            docker start "$c"; 
+        done
+    fi
+
+}
+
+atigiu_nivel_critico() {
+    local charge="$1"
+    local voltage="$2"
+    local status="$3"
+    
+    if [[ "$status" == *"OL"* ]] then
         return 0
     fi
 
-    if [[ "$status" == *"OB"* ]]; then
-        echo "$(date) - Usando bateria"
+    if [[ "$status" == *"LB"* ]] then
         return 1
     fi
 
-    if [[ "$status" == *"LB"* ]]; then
-        echo "$(date) - Bateria em nível crítico"
+    if [ "$charge" -le "$THRESHOLD_HALT" ]; then
+        echo "$(date) - [FATAL] Limite atingido! Motivo: Charge=${charge}%"
+        enviar_email_critical_halt "$charge" "$voltage"
         return 1
     fi
 
-    return 0
-}
-
-nobreak_com_energia() {
-    local status="$1"
-    local charge="$2"
-    
-    if [[ "$status" == *"OL"* ]]; then
-        echo "$(date) - Rede externa OnLine"
-        if [[ "$charge" -gt 50 ]]; then
-            echo "$(date) - Carga maior que 50%"  
-            return 1
-        fi
+    if [ "$voltage" -le "$THRESHOLD_VOLTAGE" ]; then
+        echo "$(date) - [FATAL] Limite atingido! Motivo: Volt=${voltage}V"
+        enviar_email_critical_halt "$charge" "$voltage"
+        return 1
     fi
 
     return 0
@@ -146,26 +166,9 @@ while true; do
         docker exec nut-server upscmd sms@localhost beeper.disable
     fi
 
-    VOLT_CRITICAL=$(echo "$VOLTAGE < $THRESHOLD_VOLTAGE" | bc -l 2>/dev/null)
-
     if [ ! -z "$VOLTAGE" ] && [ ! -z "$STATUS" ]; then
-        VOLT_CRITICAL=$(echo "$VOLTAGE < $THRESHOLD_VOLTAGE" | bc -l 2>/dev/null)
-
-        if [[ "$STATUS" == *"OB"* ]] && ([ "$CHARGE" -le "$THRESHOLD_HALT" ] || [ "$VOLT_CRITICAL" -eq 1 ]); then
-            echo "$(date) - [FATAL] Limite atingido! Motivo: Charge=${CHARGE}% ou Volt=${VOLTAGE}V"
-            enviar_email_critical_halt "$CHARGE" "$VOLTAGE"
-            
-            echo "$(date) - [STOP] Parando containers..."
-            docker stop $(docker ps -q) -t 30
-            
-            echo "$(date) - [FS] Sincronizando discos e desmontando /mnt/storage"
-            sync && umount /mnt/storage
-            
-            echo "$(date) - [UPS] Enviando KILL POWER"
-            docker exec nut-server upsdrvctl shutdown
-            
-            echo "$(date) - [HALT] Desligando SO."
-            /sbin/shutdown -h +0
+        if atigiu_nivel_critico "$CHARGE" "$VOLTAGE" "$STATUS"; then
+            encerrar_sistemas
             exit 0
         fi
     fi
@@ -176,19 +179,16 @@ while true; do
              if [ ! -z "$CONTAINERS_TO_STOP" ]; then
                 echo "$(date) - Falta de energia. Parando não-críticos..."
                 enviar_email_shutdown "$CHARGE" "$CONTAINERS_TO_STOP"
-                for c in $CONTAINERS_TO_STOP; do docker stop "$c" -t 30; done
+                for c in $CONTAINERS_TO_STOP; do 
+                    docker stop "$c" -t 30; 
+                done
              fi
         fi
     fi
 
     if [[ "$STATUS" == *"OL"* ]] && [ "$CHARGE" -gt 50 ]; then
-        PARADOS=$(docker ps -a -f "status=exited" --format "{{.Names}}")
-        if [ ! -z "$PARADOS" ]; then
-            echo "$(date) - Energia restaurada. Subindo serviços..."
-            enviar_email_startup "$CHARGE" "$PARADOS"
-            for c in $PARADOS; do docker start "$c"; done
-        fi
+        restaurar_sistemas $CHARGE
     fi
 
-    sleep 30
+    sleep 10
 done
