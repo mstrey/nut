@@ -35,7 +35,6 @@ enviar_email_critical_halt() {
     enviar_email "$body" "$subject"
 }
 
-# Constrói a regex dinamicamente com base na lista de exclusão
 IGNORE_PATTERN="^($(IFS='|'; echo "${IGNORED_CONTAINERS[*]}"))$"
 
 enviar_email_shutdown() {
@@ -93,7 +92,7 @@ enviar_email() {
 
 encerrar_sistemas() {
     echo "$(date) - [STOP] Parando containers..."
-    docker stop $(docker ps -q) -t 30
+    # docker stop $(docker ps -q) -t 30
     
     echo "$(date) - [FS] Sincronizando discos e desmontando /mnt/storage"
     # sync && umount /mnt/storage
