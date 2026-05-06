@@ -30,8 +30,9 @@ LAST_VOLTAGE=""
 enviar_email_critical_halt() {
     local charge="$1"
     local volt="$2"
+    local status="$3"
     local subject="[ALERTA CRÍTICO UPS] Desligando Servidor"
-    local body="Bateria atingiu nível crítico: ${charge}% (${volt}V). Desligando sistema e UPS."
+    local body="Bateria atingiu nível crítico: ${charge}% (${volt}V) \n Status: $status. Desligando sistema e UPS."
     enviar_email "$body" "$subject"
 }
 
@@ -125,26 +126,28 @@ atigiu_nivel_critico() {
     local status="$3"
     
     if [[ "$status" == *"OL"* ]] then
-        return 0
+        return $false
     fi
 
     if [[ "$status" == *"LB"* ]] then
-        return 1
+        echo "$(date) - [FATAL] Status LOW BATTERY atingido: Charge=${charge}% - Volt=${voltage}V"
+        enviar_email_critical_halt "$charge" "$voltage" "$status"
+        return $true
     fi
 
     if [ "$charge" -le "$THRESHOLD_HALT" ]; then
-        echo "$(date) - [FATAL] Limite atingido! Motivo: Charge=${charge}%"
-        enviar_email_critical_halt "$charge" "$voltage"
-        return 1
+        echo "$(date) - [FATAL] Limite de carga atingido! Motivo: Charge=${charge}%"
+        enviar_email_critical_halt "$charge" "$voltage" "$status"
+        return $true
     fi
 
     if [ "$voltage" -le "$THRESHOLD_VOLTAGE" ]; then
-        echo "$(date) - [FATAL] Limite atingido! Motivo: Volt=${voltage}V"
-        enviar_email_critical_halt "$charge" "$voltage"
-        return 1
+        echo "$(date) - [FATAL] Limite de voltagem atingido! Motivo: Volt=${voltage}V"
+        enviar_email_critical_halt "$charge" "$voltage" "$status"
+        return $true
     fi
 
-    return 0
+    return $false
 }
 
 echo "$(date) - Iniciando monitoramento contínuo do Nobreak SMS..."
@@ -162,6 +165,7 @@ while true; do
     fi
 
     if [[ "$STATUS" == *"OB"* ]]; then
+        echo "$(date) - Status ON BATTERY desativando beeper..."
         docker exec nut-server upscmd sms@localhost beeper.disable
     fi
 
