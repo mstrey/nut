@@ -126,28 +126,25 @@ atigiu_nivel_critico() {
     local status="$3"
     
     if [[ "$status" == *"OL"* ]] then
-        return $false
+        return 1
     fi
 
     if [[ "$status" == *"LB"* ]] then
         echo "$(date) - [FATAL] Status LOW BATTERY atingido: Charge=${charge}% - Volt=${voltage}V"
-        enviar_email_critical_halt "$charge" "$voltage" "$status"
-        return $true
+        return 0
     fi
 
     if [ "$charge" -le "$THRESHOLD_HALT" ]; then
         echo "$(date) - [FATAL] Limite de carga atingido! Motivo: Charge=${charge}%"
-        enviar_email_critical_halt "$charge" "$voltage" "$status"
-        return $true
+        return 0
     fi
 
     if [ "$voltage" -le "$THRESHOLD_VOLTAGE" ]; then
         echo "$(date) - [FATAL] Limite de voltagem atingido! Motivo: Volt=${voltage}V"
-        enviar_email_critical_halt "$charge" "$voltage" "$status"
-        return $true
+        return 0
     fi
 
-    return $false
+    return 1
 }
 
 echo "$(date) - Iniciando monitoramento contínuo do Nobreak SMS..."
@@ -171,6 +168,7 @@ while true; do
 
     if [ ! -z "$VOLTAGE" ] && [ ! -z "$STATUS" ]; then
         if atigiu_nivel_critico "$CHARGE" "$VOLTAGE" "$STATUS"; then
+            enviar_email_critical_halt "$CHARGE" "$VOLTAGE" "$STATUS"
             encerrar_sistemas
             exit 0
         fi
