@@ -134,14 +134,19 @@ atigiu_nivel_critico() {
         return 0
     fi
 
-    if [ "$charge" -le "$THRESHOLD_HALT" ]; then
-        echo "$(date) - [FATAL] Limite de carga atingido! Motivo: Charge=${charge}%"
-        return 0
+    if [ ! -z "$charge" ]; then
+        if [ "$charge" -le "$THRESHOLD_HALT" ]; then
+            echo "$(date) - [FATAL] Limite de carga atingido! Motivo: Charge=${charge}%"
+            return 0
+        fi
     fi
 
-    if [ "$voltage" -le "$THRESHOLD_VOLTAGE" ]; then
-        echo "$(date) - [FATAL] Limite de voltagem atingido! Motivo: Volt=${voltage}V"
-        return 0
+    if [ ! -z "$voltage" ]; then
+        local volt_check=$(echo "$voltage <= $THRESHOLD_VOLTAGE" | bc -l)
+        if [ "$volt_check" -eq 1 ]; then
+            echo "$(date) - [FATAL] Limite de voltagem: ${voltage}V"
+            return 0
+        fi
     fi
 
     return 1
