@@ -1,6 +1,8 @@
 #!/bin/bash
 
-# Comunica direto com o container nut-server pela rede interna do Docker
+exec 1> >(stdbuf -oL cat)
+exec 2> >(stdbuf -oL cat)
+
 UPS_NAME="sms@nut-server"
 
 EMAIL_DESTINO="${EMAIL_DESTINO:-}"
@@ -21,40 +23,43 @@ IGNORED_CONTAINERS=(
     "ms-rasp-dc"
 )
 
-THRESHOLD_HALT=15 
-THRESHOLD_VOLTAGE="11.90"
+THRESHOLD_HALT=15
 LAST_STATUS=""
 LAST_CHARGE=""
-LAST_VOLTAGE=""
+POWER_FAILURE_START=0
+
+formatar_tempo() {
+    local segundos=$1
+    printf '%02dh %02dm %02ds\n' $((segundos/3600)) $((segundos%3600/60)) $((segundos%60))
+}
 
 enviar_email_critical_halt() {
     local charge="$1"
-    local volt="$2"
-    local status="$3"
+    local status="$2"
+    local duracao="$3"
+
     local subject="[ALERTA CRÍTICO UPS] Desligando Servidor"
-    local body="Bateria atingiu nível crítico: ${charge}% (${volt}V) \n Status: $status. Desligando sistema e UPS."
+    local body="Bateria atingiu nível crítico após ${duracao} sem energia.\\nCarga: ${charge}%.\\nStatus: $status.\\nDesligando sistema e UPS imediatamente."
+    
     enviar_email "$body" "$subject"
 }
 
-IGNORE_PATTERN="^($(IFS='|'; echo "${IGNORED_CONTAINERS[*]}"))$"
-
 enviar_email_shutdown() {
     local charge_level="$1"
-    local containers="$2"
 
-    local subject="[ALERTA UPS] Falta de energia - Parando containers"
-    local body="A energia do servidor caiu. O Nobreak está atualmente com a bateria em ${charge_level}%.\n\nParando containers:\n${containers}"
+    local subject="[ALERTA UPS] Falta de energia"
+    local body="A energia do servidor caiu. O Nobreak está atualmente com a bateria em ${charge_level}%."
 
     enviar_email "$body" "$subject"
 }
 
 enviar_email_startup() {
     local charge_level="$1"
-    local containers="$2"
+    local duracao="$2"
 
-    local subject="[ALERTA UPS] Retorno de energia - Iniciando containers"
-    local body="A energia do servidor voltou. O Nobreak está atualmente com a bateria em ${charge_level}%.\n\nIniciando containers:\n${containers}"
-
+    local subject="[ALERTA UPS] Energia Restaurada"
+    local body="A energia retornou. O nobreak ficou sem energia por: ${duracao}.\\nBateria atual em ${charge_level}%."
+    
     enviar_email "$body" "$subject"
 }
 
@@ -70,7 +75,6 @@ enviar_email() {
 
         local PAYLOAD="From: ${SES_FROM_EMAIL}\nTo: ${EMAIL_DESTINO}\nSubject: ${subject}\n\n${body}"
 
-        # Captura o output e o código de status do curl para log
         RESPONSE=$(echo -e "$PAYLOAD" | curl --url "$PROTO://$SES_SMTP_HOST:$SES_SMTP_PORT" \
             --ssl-reqd \
             --mail-from "$SES_FROM_EMAIL" \
@@ -93,44 +97,28 @@ enviar_email() {
 
 encerrar_sistemas() {
     echo "$(date) - [STOP] Parando containers..."
-    # docker stop $(docker ps -q) -t 30
+    docker stop $(docker ps -q) -t 30
     
     echo "$(date) - [FS] Sincronizando discos e desmontando /mnt/storage"
-    # sync && umount /mnt/storage
+    sync && umount /mnt/storage
     
     echo "$(date) - [UPS] Enviando KILL POWER"
-    # docker exec nut-server upsdrvctl shutdown
+    docker exec nut-server upsdrvctl shutdown
     
     echo "$(date) - [HALT] Desligando SO."
-    # /sbin/shutdown -h +0
-}
-
-restaurar_sistemas() {
-    local charge="$1"
-
-    local PARADOS=$(docker ps -a -f "status=exited" --format "{{.Names}}")
-
-    if [ ! -z "$PARADOS" ]; then
-        echo "$(date) - Energia restaurada. Subindo serviços..."
-        enviar_email_startup "$charge" "$PARADOS"
-        for c in $PARADOS; do 
-            docker start "$c"; 
-        done
-    fi
-
+    /sbin/shutdown -h +0
 }
 
 atigiu_nivel_critico() {
     local charge="$1"
-    local voltage="$2"
-    local status="$3"
+    local status="$2"
     
-    if [[ "$status" == *"OL"* ]] then
+    if [[ "$status" == *"OL"* ]]; then
         return 1
     fi
 
-    if [[ "$status" == *"LB"* ]] then
-        echo "$(date) - [FATAL] Status LOW BATTERY atingido: Charge=${charge}% - Volt=${voltage}V"
+    if [[ "$status" == *"LB"* ]]; then
+        echo "$(date) - [FATAL] Status LOW BATTERY atingido: Charge=${charge}%"
         return 0
     fi
 
@@ -141,60 +129,58 @@ atigiu_nivel_critico() {
         fi
     fi
 
-    if [ ! -z "$voltage" ]; then
-        local volt_check=$(echo "$voltage <= $THRESHOLD_VOLTAGE" | bc -l)
-        if [ "$volt_check" -eq 1 ]; then
-            echo "$(date) - [FATAL] Limite de voltagem: ${voltage}V"
-            return 0
-        fi
-    fi
-
     return 1
 }
 
 echo "$(date) - Iniciando monitoramento contínuo do Nobreak SMS..."
 
 while true; do
-    CHARGE=$(upsc $UPS_NAME battery.charge 2>/dev/null | grep -oE '[0-9]+' | head -1)
-    VOLTAGE=$(upsc $UPS_NAME battery.voltage 2>/dev/null)
-    STATUS=$(upsc $UPS_NAME ups.status 2>/dev/null)
+    sleep 10
+    DATA=$(upsc $UPS_NAME 2>/dev/null)
+    CHARGE=$(echo "$DATA" | grep "battery.charge:" | awk '{print $2}' | cut -d. -f1)
+    STATUS=$(echo "$DATA" | grep "ups.status:" | awk '{print $2}')
+    
+    if [ -z "$DATA" ]; then
+        echo "$(date) - [ERRO] Falha ao comunicar com nut-server. Tentando novamente..."
+        sleep 5
+        continue
+    fi
 
-    if [ "$STATUS" != "$LAST_STATUS" ] || [ "$CHARGE" != "$LAST_CHARGE" ] || [ "$VOLTAGE" != "$LAST_VOLTAGE" ]; then
-        echo "$(date) - Status: $STATUS | Bateria: $CHARGE% | Voltagem: ${VOLTAGE}V"
+    if [ "$STATUS" != "$LAST_STATUS" ] || [ "$CHARGE" != "$LAST_CHARGE" ]; then
+        echo "$(date) - Status: $STATUS | Carga: $CHARGE%"
         LAST_STATUS="$STATUS"
         LAST_CHARGE="$CHARGE"
-        LAST_VOLTAGE="$VOLTAGE"
     fi
 
-    if [[ "$STATUS" == *"OB"* ]]; then
-        echo "$(date) - Status ON BATTERY desativando beeper..."
-        docker exec nut-server upscmd sms@localhost beeper.disable
+    if [[ "$LAST_STATUS" == *"OL"* ]] && [[ "$STATUS" != *"OL"* ]]; then
+        POWER_FAILURE_START=$(date +%s)
+        echo "$(date) - Queda de energia detectada. Iniciando contagem de tempo."
+        enviar_email_shutdown "$CHARGE" "$STATUS"
+        continue
+    fi
+      
+    if [[ "$LAST_STATUS" != *"OL"* ]] && [[ "$STATUS" == *"OL"* ]]; then
+        SEC_DIFF=$(( $(date +%s) - POWER_FAILURE_START ))
+        DURACAO_TOTAL=$(formatar_tempo $SEC_DIFF)
+        
+        echo "$(date) - Energia restaurada após $DURACAO_TOTAL."
+        enviar_email_startup "$CHARGE" "$DURACAO_TOTAL"
+
+        POWER_FAILURE_START=0
+        continue
     fi
 
-    if [ ! -z "$VOLTAGE" ] && [ ! -z "$STATUS" ]; then
-        if atigiu_nivel_critico "$CHARGE" "$VOLTAGE" "$STATUS"; then
+    if [ ! -z "$STATUS" ] && [[ "$STATUS" != *"OL"* ]]; then
+        if atigiu_nivel_critico "$CHARGE" "$STATUS"; then
+            DURACAO_TOTAL="Desconhecida"
+            if [ "$POWER_FAILURE_START" -ne 0 ]; then
+                SEC_DIFF=$(( $(date +%s) - POWER_FAILURE_START ))
+                DURACAO_TOTAL=$(formatar_tempo $SEC_DIFF)
+            fi
             enviar_email_critical_halt "$CHARGE" "$VOLTAGE" "$STATUS"
             encerrar_sistemas
             exit 0
         fi
     fi
 
-    if [ ! -z "$CHARGE" ] && [[ "$STATUS" == *"OB"* ]]; then
-        if [ "$CHARGE" -le 20 ]; then
-             CONTAINERS_TO_STOP=$(docker ps --format "{{.Names}}" | grep -vE "$IGNORE_PATTERN")
-             if [ ! -z "$CONTAINERS_TO_STOP" ]; then
-                echo "$(date) - Falta de energia. Parando não-críticos..."
-                enviar_email_shutdown "$CHARGE" "$CONTAINERS_TO_STOP"
-                for c in $CONTAINERS_TO_STOP; do 
-                    docker stop "$c" -t 30; 
-                done
-             fi
-        fi
-    fi
-
-    if [[ "$STATUS" == *"OL"* ]] && [ "$CHARGE" -gt 50 ]; then
-        restaurar_sistemas $CHARGE
-    fi
-
-    sleep 10
 done

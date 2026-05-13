@@ -9,9 +9,9 @@ RUN rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /var/run/nut && chown root:dialout /var/run/nut
 
 WORKDIR /tmp/build
-RUN wget https://github.com/networkupstools/nut/releases/download/v2.8.2/nut-2.8.2.tar.gz
-RUN tar -xzf nut-2.8.2.tar.gz
-RUN cd nut-2.8.2 && \
+RUN wget https://github.com/networkupstools/nut/releases/download/v2.8.5/nut-2.8.5.tar.gz
+RUN tar -xzf nut-2.8.5.tar.gz
+RUN cd nut-2.8.5 && \
     ./configure \
     --prefix=/usr \
     --sysconfdir=/etc/nut \

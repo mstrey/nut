@@ -3,4 +3,6 @@
 
 # Ignorar logs de execução e pastas de dados locais
 *.log
+*.txt
+*.csv
 dados/
