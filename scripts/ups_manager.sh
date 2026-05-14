@@ -97,13 +97,29 @@ enviar_email() {
 
 encerrar_sistemas() {
     echo "$(date) - [STOP] Parando containers..."
-    docker stop $(docker ps -q) -t 30
-    
-    echo "$(date) - [FS] Sincronizando discos e desmontando /mnt/storage"
-    sync && umount /mnt/storage
+    local containers_to_stop=()
+    for c in $(docker ps --format '{{.Names}}'); do
+        local ignored=false
+        for ic in "${IGNORED_CONTAINERS[@]}"; do
+            if [ "$c" = "$ic" ]; then
+                ignored=true
+                break
+            fi
+        done
+        if [ "$ignored" = false ]; then
+            containers_to_stop+=("$c")
+        fi
+    done
+
+    if [ ${#containers_to_stop[@]} -gt 0 ]; then
+        docker stop "${containers_to_stop[@]}" -t 30
+    fi
     
     echo "$(date) - [UPS] Enviando KILL POWER"
     docker exec nut-server upsdrvctl shutdown
+    
+    echo "$(date) - [FS] Sincronizando discos e desmontando /mnt/storage"
+    sync && umount /mnt/storage
     
     echo "$(date) - [HALT] Desligando SO."
     /sbin/shutdown -h +0
@@ -177,7 +193,7 @@ while true; do
                 SEC_DIFF=$(( $(date +%s) - POWER_FAILURE_START ))
                 DURACAO_TOTAL=$(formatar_tempo $SEC_DIFF)
             fi
-            enviar_email_critical_halt "$CHARGE" "$VOLTAGE" "$STATUS"
+            enviar_email_critical_halt "$CHARGE" "$STATUS" "$DURACAO_TOTAL"
             encerrar_sistemas
             exit 0
         fi
