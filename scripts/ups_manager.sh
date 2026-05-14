@@ -27,6 +27,7 @@ THRESHOLD_HALT=15
 LAST_STATUS=""
 LAST_CHARGE=""
 POWER_FAILURE_START=0
+IS_NIVEL_CRITICO=false
 
 formatar_tempo() {
     local segundos=$1
@@ -115,14 +116,16 @@ encerrar_sistemas() {
         docker stop "${containers_to_stop[@]}" -t 30
     fi
     
-    echo "$(date) - [UPS] Enviando KILL POWER"
-    docker exec nut-server upsdrvctl shutdown
-    
     echo "$(date) - [FS] Sincronizando discos e desmontando /mnt/storage"
     sync && umount /mnt/storage
     
-    echo "$(date) - [HALT] Desligando SO."
-    /sbin/shutdown -h +0
+}
+
+reiniciar_containers() {
+    echo "$(date) - [START] Reiniciando containers..."
+    docker start "${containers_to_stop[@]}"
+    echo "$(date) - [START] Montando /mnt/storage"
+    fstab -a
 }
 
 atigiu_nivel_critico() {
@@ -135,12 +138,14 @@ atigiu_nivel_critico() {
 
     if [[ "$status" == *"LB"* ]]; then
         echo "$(date) - [FATAL] Status LOW BATTERY atingido: Charge=${charge}%"
+        IS_NIVEL_CRITICO=true
         return 0
     fi
 
     if [ ! -z "$charge" ]; then
         if [ "$charge" -le "$THRESHOLD_HALT" ]; then
             echo "$(date) - [FATAL] Limite de carga atingido! Motivo: Charge=${charge}%"
+            IS_NIVEL_CRITICO=true
             return 0
         fi
     fi
@@ -180,12 +185,22 @@ while true; do
         DURACAO_TOTAL=$(formatar_tempo $SEC_DIFF)
         
         echo "$(date) - Energia restaurada após $DURACAO_TOTAL."
-        enviar_email_startup "$CHARGE" "$DURACAO_TOTAL"
 
         POWER_FAILURE_START=0
+        if [ "$IS_NIVEL_CRITICO" = true ]; then
+            IS_NIVEL_CRITICO=false
+            reiniciar_containers
+        fi
+
+        enviar_email_startup "$CHARGE" "$DURACAO_TOTAL"
+
         continue
     fi
 
+    if [ "$IS_NIVEL_CRITICO" = true ]; then
+        continue
+    fi
+    
     if [ ! -z "$STATUS" ] && [[ "$STATUS" != *"OL"* ]]; then
         if atigiu_nivel_critico "$CHARGE" "$STATUS"; then
             DURACAO_TOTAL="Desconhecida"
@@ -195,7 +210,6 @@ while true; do
             fi
             enviar_email_critical_halt "$CHARGE" "$STATUS" "$DURACAO_TOTAL"
             encerrar_sistemas
-            exit 0
         fi
     fi
 
