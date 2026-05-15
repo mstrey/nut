@@ -36,11 +36,10 @@ formatar_tempo() {
 
 enviar_email_critical_halt() {
     local charge="$1"
-    local status="$2"
-    local duracao="$3"
+    local duracao="$2"
 
     local subject="[ALERTA CRÍTICO UPS] Desligando Servidor"
-    local body="Bateria atingiu nível crítico após ${duracao} sem energia.\\nCarga: ${charge}%.\\nStatus: $status.\\nDesligando sistema e UPS imediatamente."
+    local body="Bateria atingiu nível crítico após ${duracao} sem energia.\\nCarga: ${charge}%.\\nDesligando sistema e UPS imediatamente."
     
     enviar_email "$body" "$subject"
 }
@@ -208,7 +207,7 @@ while true; do
                 SEC_DIFF=$(( $(date +%s) - POWER_FAILURE_START ))
                 DURACAO_TOTAL=$(formatar_tempo $SEC_DIFF)
             fi
-            enviar_email_critical_halt "$CHARGE" "$STATUS" "$DURACAO_TOTAL"
+            enviar_email_critical_halt "$CHARGE" "$DURACAO_TOTAL"
             encerrar_sistemas
         fi
     fi
