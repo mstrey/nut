@@ -4,6 +4,7 @@ exec 1> >(stdbuf -oL cat)
 exec 2> >(stdbuf -oL cat)
 
 UPS_NAME="sms@nut-server"
+CONTAINERS_STOPPED=()
 
 EMAIL_DESTINO="${EMAIL_DESTINO:-}"
 SES_SMTP_USER="${SES_SMTP_USER:-}"
@@ -97,7 +98,8 @@ enviar_email() {
 
 encerrar_sistemas() {
     echo "$(date) - [STOP] Parando containers..."
-    local containers_to_stop=()
+    CONTAINERS_STOPPED=()
+    
     for c in $(docker ps --format '{{.Names}}'); do
         local ignored=false
         for ic in "${IGNORED_CONTAINERS[@]}"; do
@@ -107,24 +109,32 @@ encerrar_sistemas() {
             fi
         done
         if [ "$ignored" = false ]; then
-            containers_to_stop+=("$c")
+            CONTAINERS_STOPPED+=("$c")
         fi
     done
 
-    if [ ${#containers_to_stop[@]} -gt 0 ]; then
-        docker stop "${containers_to_stop[@]}" -t 30
+    if [ ${#CONTAINERS_STOPPED[@]} -gt 0 ]; then
+        echo "$(date) - [STOP] Containers a parar: ${CONTAINERS_STOPPED[*]}"
+        docker stop "${CONTAINERS_STOPPED[@]}" -t 30
+    else
+        echo "$(date) - [STOP] Nenhum container adicional para parar."
     fi
     
     echo "$(date) - [FS] Sincronizando discos e desmontando /mnt/storage"
     sync && umount /mnt/storage
-    
 }
 
 reiniciar_containers() {
-    echo "$(date) - [START] Reiniciando containers..."
-    docker start "${containers_to_stop[@]}"
     echo "$(date) - [START] Montando /mnt/storage"
-    fstab -a
+    mount -a
+
+    if [ ${#CONTAINERS_STOPPED[@]} -gt 0 ]; then
+        echo "$(date) - [START] Reiniciando containers que foram suspensos: ${CONTAINERS_STOPPED[*]}"
+        docker start "${CONTAINERS_STOPPED[@]}"
+        CONTAINERS_STOPPED=()
+    else
+        echo "$(date) - [START] Nenhum container registrado para reiniciar."
+    fi
 }
 
 atigiu_nivel_critico() {
