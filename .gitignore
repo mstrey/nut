@@ -1,7 +1,8 @@
-# Ignorar arquivos de ambiente
+# Ignorar arquivos de variaveis do ambiente
 .env
 
 # Ignorar logs de execução e pastas de dados locais
+logs/
 *.log
 *.txt
 *.csv
