@@ -38,6 +38,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./scripts/ups_manager.sh:/usr/local/bin/ups_manager.sh:ro
+      - ./logs:/logs
     entrypoint: [ "/bin/bash", "/usr/local/bin/ups_manager.sh" ]
     networks:
       - backend
